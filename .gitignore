@@ -1,0 +1,44 @@
+# ─── 1. Python ──────────────────────────────────────────────────────────────
+# Entorno virtual
+backend/venv/
+
+# Caché y bytecode
+**/__pycache__/
+*.py[cod]
+
+# ─── 2. Archivos de configuración y secretos ────────────────────────────────
+# Variables de entorno (API keys, URIs, etc.)
+*.env
+
+# Tokens OAuth y credenciales sensibles
+backend/token.json
+backend/credentials.json
+
+# ─── 3. Frontend ───────────────────────────────────────────────────────────
+# Dependencias de Node
+frontend/node_modules/
+
+# Build output de Vite (o CRA)
+frontend/dist/
+# (si usas `build/` en lugar de `dist/` ponlo aquí)
+
+# ─── 4. Logs y caches ───────────────────────────────────────────────────────
+# Archivos de log de npm/yarn
+npm-debug.log*
+yarn-debug.log*
+*.log
+
+# Cachés varios
+.cache/
+*.tmp
+
+# ─── 5. Sistema / IDE ───────────────────────────────────────────────────────
+# macOS
+.DS_Store
+
+# VS Code
+.vscode/
+
+# Otros editores
+*.suo
+*.swp
