@@ -24,7 +24,9 @@ export default function App() {
 
   // 2) Función para run-now
   const runNow = async () => {
-    const res = await fetch(`${API}/run-now`);
+    const res = await fetch(`${API}/run-now`, {
+        credentials: 'include'
+      });      
     const json = await res.json();
     setResults(json.results);
   };

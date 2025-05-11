@@ -21,15 +21,22 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // Express setup
 const app = express();
-app.use(cors());
+app.use(cors({
+    origin: FRONTEND_URL,   // e.g. https://taupe-manatee-499615.netlify.app
+    credentials: true
+  }));
 app.use(express.json());
 app.use(session({
-  secret: process.env.SESSION_SECRET || 'change_this_secret',
-  resave: false,
-  saveUninitialized: true,
-  cookie: { secure: process.env.NODE_ENV === 'production' }
-}));
-
+    secret: process.env.SESSION_SECRET,
+    resave: false,
+    saveUninitialized: true,
+    cookie: {
+      secure: process.env.NODE_ENV === 'production',  // on HTTPS only
+      sameSite: 'none',                               // allow cross‑site
+      maxAge: 24 * 60 * 60 * 1000                     // e.g. 1 day
+    }
+  }));
+  
 // Health check (for Render)
 app.get('/health', (req, res) => res.send('OK'));
 
