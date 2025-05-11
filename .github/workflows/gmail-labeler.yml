@@ -1,44 +1,44 @@
-name: Schedule Gmail Labeler
+name: Run Gmail Labeler
 
 on:
   schedule:
-    - cron: '0 14 * * *'
-    - cron: '0 22 * * *'
+    # 07:00 y 15:00 UTC diario
+    - cron: '0 7 * * *'
+    - cron: '0 15 * * *'
   workflow_dispatch:
 
 jobs:
   run-labeler:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
         with:
-          python-version: '3.10'
+          node-version: '18'
 
-      - name: Install dependencies
+      - name: Install backend deps
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          cd backend
+          npm ci
 
       - name: Restore credentials.json
         run: |
-          printf '%s' "${{ secrets.GOOGLE_CREDENTIALS_JSON }}" > credentials.json
+          printf '%s' "${{ secrets.GOOGLE_CREDENTIALS_JSON }}" > backend/credentials.json
 
       - name: Restore token.json (optional)
         run: |
           if [ -n "${{ secrets.GMAIL_TOKEN_JSON_B64 }}" ]; then
             echo "${{ secrets.GMAIL_TOKEN_JSON_B64 }}" \
-              | base64 --decode > token.json
-          else
-            echo "No GMAIL_TOKEN_JSON_B64 provided, will do OAuth flow"
+            | base64 --decode > backend/token.json
           fi
 
-      - name: Run Gmail Labeler
+      - name: Run labeler
+        working-directory: backend
+        run: npm run label
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: python main.py
-
+          REDIRECT_URI:     ${{ secrets.REDIRECT_URI }}
+          SESSION_SECRET:   ${{ secrets.SESSION_SECRET }}
