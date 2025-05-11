@@ -21,6 +21,7 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // Express setup
 const app = express();
+app.set('trust proxy', 1);
 app.use(cors({
     origin: FRONTEND_URL,   // e.g. https://taupe-manatee-499615.netlify.app
     credentials: true
@@ -157,9 +158,6 @@ async function processJob(req) {
     q: 'is:unread',
     maxResults: 5
   });
-
-  console.log('GMAIL LIST RESPONSE:', JSON.stringify(listRes.data, null, 2));
-
   const messages = listRes.data.messages || [];
   const summary = [];
 
