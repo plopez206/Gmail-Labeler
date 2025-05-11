@@ -158,6 +158,8 @@ async function processJob(req) {
     maxResults: 5
   });
 
+  console.log('GMAIL LIST RESPONSE:', JSON.stringify(listRes.data, null, 2));
+
   const messages = listRes.data.messages || [];
   const summary = [];
 
@@ -192,6 +194,11 @@ console.log('Scheduler is set (manual only, scheduled runs skip sessions)');
 
 // Manual /run-now: only works in authenticated session
 app.get('/run-now', async (req, res) => {
+    console.log('SESSION TOKENS:', req.session.tokens);
+    if (!req.session.tokens) {
+      console.log('→ No tokens in this session');
+      return res.status(401).json({ status:'error', message:'Not authenticated in this session' });
+    }
   try {
     const results = await processJob(req);
     return res.json({ status: 'ok', results });
