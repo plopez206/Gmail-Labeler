@@ -2,33 +2,41 @@ import { useEffect, useState } from 'react';
 import 'bootstrap/dist/css/bootstrap.min.css';
 
 export default function App() {
-  const API = import.meta.env.VITE_API_BASE_URL;
+  const API = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
   const [connected, setConnected] = useState(false);
   const [results,   setResults]   = useState(null);
 
-  // 1) Al montar, comprobamos estado + query param
+  // 1) On mount, check for ?authed=true then fall back to /status
   useEffect(() => {
-    // Si venimos de Google con ?authed=true
-    if (new URLSearchParams(window.location.search).get('authed') === 'true') {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('authed') === 'true') {
       setConnected(true);
-      // limpiamos el query param de la URL
+      // remove query param without reloading
       window.history.replaceState({}, '', window.location.pathname);
     } else {
-      // Sino preguntamos al backend
-      fetch(`${API}/status`)
-        .then(r => r.json())
-        .then(json => setConnected(json.connected))
-        .catch(() => setConnected(false));
-    }
-  }, []);
-
-  // 2) Función para run-now
-  const runNow = async () => {
-    const res = await fetch(`${API}/run-now`, {
+      fetch(`${API}/status`, {
         credentials: 'include'
-      });      
-    const json = await res.json();
-    setResults(json.results);
+      })
+      .then(r => r.json())
+      .then(json => setConnected(json.connected))
+      .catch(() => setConnected(false));
+    }
+  }, [API]);
+
+  // 2) run-now must also include credentials
+  const runNow = async () => {
+    setResults(null);
+    try {
+      const res = await fetch(`${API}/run-now`, {
+        credentials: 'include'
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      setResults(json.results);
+    } catch (err) {
+      console.error('Run Now failed:', err);
+      setResults([]);
+    }
   };
 
   return (
