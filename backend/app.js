@@ -91,7 +91,6 @@ async function classifyEmail(from, subject, snippet, body) {
   
   Si no encaja con ninguna, devuelve una etiqueta dinámica con el prefijo “Custom/”. Por ejemplo: “Custom/Registro de pago”.`
   };
-  
   const examples = [{
     from: 'noreply@github.com', subject: 'Please verify your email', snippet: 'Click aquí para verificar tu cuenta', body: '', label: 'Action Required'
   },{
