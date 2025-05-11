@@ -32,9 +32,7 @@ export default defineConfig(({ mode }) => ({
 
   // 3) Define build options
   build: {
-    outDir: mode === 'development'
-      ? 'dist'                        // en dev, deja en dist/
-      : '../backend/static',         // en prod, copia al backend/static
+    outDir: 'dist',
     emptyOutDir: true,
     sourcemap: mode === 'development'
   },
