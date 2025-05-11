@@ -41,14 +41,23 @@ function saveWhitelist(list) {
 }
 
 // OAuth2 client factory supporting both web and installed creds
+// OAuth2 client factory supporting both web and installed creds
 function getOAuth2Client() {
-  const raw = fs.readFileSync(CREDENTIALS_PATH, 'utf8');
+  // Load credentials JSON from environment or file
+  let raw;
+  if (process.env.GOOGLE_CREDENTIALS_JSON) {
+    raw = process.env.GOOGLE_CREDENTIALS_JSON;
+  } else {
+    raw = fs.readFileSync(CREDENTIALS_PATH, 'utf8');
+  }
   const creds = JSON.parse(raw);
   const conf = creds.web || creds.installed;
   if (!conf) {
     console.error("credentials.json must contain 'web' or 'installed'");
     process.exit(1);
   }
+  return new google.auth.OAuth2(conf.client_id, conf.client_secret, REDIRECT_URI);
+}
   return new google.auth.OAuth2(conf.client_id, conf.client_secret, REDIRECT_URI);
 }
 
