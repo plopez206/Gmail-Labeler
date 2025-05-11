@@ -25,7 +25,7 @@ const TABLE = 'users'; // tabla con columnas: email (PK) y tokens (JSON)
 // Inicializar OpenAI
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// Express
+// Express setup
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -41,17 +41,14 @@ app.use(session({
 function getOAuth2Client() {
   let raw;
   if (process.env.GOOGLE_CREDENTIALS_JSON) {
-    // Cargamos el JSON directamente desde la variable de entorno
     raw = process.env.GOOGLE_CREDENTIALS_JSON;
   } else {
-    // Fallback a fichero local (para desarrollo)
     raw = fs.readFileSync(CREDENTIALS_PATH, 'utf8');
   }
   const creds = JSON.parse(raw);
   const conf  = creds.web || creds.installed;
   return new google.auth.OAuth2(conf.client_id, conf.client_secret, REDIRECT_URI);
 }
-
 
 async function getGmailService(email) {
   const { data, error } = await supabase
@@ -67,19 +64,57 @@ async function getGmailService(email) {
   return google.gmail({ version: 'v1', auth: client });
 }
 
-async function classifyEmail(subject, snippet) {
+function extractPlainText(payload) {
+  if (payload.mimeType === 'text/plain' && payload.body?.data) {
+    const buff = Buffer.from(payload.body.data, 'base64');
+    return buff.toString('utf8');
+  }
+  if (payload.parts) {
+    for (const part of payload.parts) {
+      const text = extractPlainText(part);
+      if (text) return text;
+    }
+  }
+  return '';
+}
+
+async function classifyEmail(from, subject, snippet, body) {
   const system = {
     role: 'system',
-    content: `Clasifica el correo en UNA categoría (solo devuelve el nombre exacto):\n- Important\n- Action Required\n- Urgent\n- Newsletter\n- Advertising\n- Spam or Ignore`
+    content: `Eres un clasificador de emails. Según remitente, asunto, fragmento y cuerpo, elige UNA etiqueta EXACTA:
+- Important
+- Action Required
+- Urgent
+- Newsletter
+- Advertising
+- Spam or Ignore
+Si no encaja, responde "Uncategorized".`
   };
-  const user = { role: 'user', content: `Subject: ${subject}\nSnippet: ${snippet}` };
+  const examples = [{
+    from: 'noreply@github.com', subject: 'Please verify your email', snippet: 'Click aquí para verificar tu cuenta', body: '', label: 'Action Required'
+  },{
+    from: 'offers@tienda.com', subject: 'Gran oferta de verano', snippet: '50% dto en todos los productos', body: '', label: 'Advertising'
+  },{
+    from: 'newsletter@medio.com', subject: 'Resumen semanal de noticias', snippet: 'Lo más destacado de esta semana en política', body: '', label: 'Newsletter'
+  }];
+  let prompt = '';
+  examples.forEach(ex => {
+    prompt += `From: ${ex.from}\nSubject: ${ex.subject}\nSnippet: ${ex.snippet}\nBody excerpt: ${ex.body}\n→ ${ex.label}\n\n`;
+  });
+  const user = {
+    role: 'user',
+    content: prompt +
+      `From: ${from}\nSubject: ${subject}\nSnippet: ${snippet}\nBody excerpt: ${body}`
+  };
 
   const resp = await openai.chat.completions.create({
-    model: 'gpt-3.5-turbo',
+    model: 'gpt-4',
     messages: [system, user],
     temperature: 0
   });
-  return resp.choices[0].message.content.trim();
+  const label = resp.choices[0].message.content.trim();
+  const valid = ["Important","Action Required","Urgent","Newsletter","Advertising","Spam or Ignore","Uncategorized"];
+  return valid.includes(label) ? label : "Uncategorized";
 }
 
 async function getOrCreateLabel(gmail, name) {
@@ -119,11 +154,9 @@ app.get('/auth/callback', async (req, res) => {
     const profile = await gmail.users.getProfile({ userId: 'me' });
     const email = profile.data.emailAddress;
 
-    // Intentamos guardar en Supabase…
     const { data, error } = await supabase
       .from(TABLE)
       .upsert({ email, tokens }, { onConflict: 'email' });
-    
     console.log('Upsert result:', { data, error });
     if (error) {
       console.error('Supabase upsert error:', error);
@@ -137,28 +170,29 @@ app.get('/auth/callback', async (req, res) => {
   }
 });
 
-
-// Ejecuta clasificación para un email
 async function processJobForEmail(email) {
   try {
     const gmail = await getGmailService(email);
     const { data } = await gmail.users.messages.list({
-      userId: 'me',
-      labelIds: ['INBOX'],
-      q: 'is:unread',
-      maxResults: 20
+      userId: 'me', labelIds: ['INBOX'], q: 'is:unread', maxResults: 20
     });
 
     for (const m of data.messages || []) {
       const msg = await gmail.users.messages.get({ userId: 'me', id: m.id, format: 'full' });
-      const subjectHeader = msg.data.payload.headers.find(h => h.name === 'Subject');
-      const subject = subjectHeader?.value || '(no subject)';
+      const headers = msg.data.payload.headers;
+      const fromH = headers.find(h => h.name === 'From');
+      const subjectH = headers.find(h => h.name === 'Subject');
+      const from = fromH?.value || '';
+      const subject = subjectH?.value || '(no subject)';
       const snippet = msg.data.snippet;
-      const labelName = await classifyEmail(subject, snippet);
+
+      const fullBody = extractPlainText(msg.data.payload) || '';
+      const bodyExcerpt = fullBody.slice(0, 300).replace(/\s+/g, ' ').trim();
+
+      const labelName = await classifyEmail(from, subject, snippet, bodyExcerpt);
       const labelId = await getOrCreateLabel(gmail, labelName);
       await gmail.users.messages.modify({
-        userId: 'me',
-        id: m.id,
+        userId: 'me', id: m.id,
         requestBody: { addLabelIds: [labelId], removeLabelIds: [] }
       });
     }
@@ -176,19 +210,12 @@ cron.schedule('0 7 * * *', runAll, { timezone: 'America/Chicago' });
 cron.schedule('0 16 * * *', runAll, { timezone: 'America/Chicago' });
 console.log('Cron configurado para 07:00 y 16:00 America/Chicago');
 
-// Endpoints manuales
-app.get('/run-now', async (_req, res) => {
-  await runAll();
-  res.json({ status: 'ok' });
-});
-
+app.get('/run-now', async (_req, res) => { await runAll(); res.json({ status: 'ok' }); });
 app.get('/whitelist', async (_req, res) => {
   const { data: users } = await supabase.from(TABLE).select('email');
   res.json({ whitelist: users?.map(u => u.email) || [] });
 });
-
 app.get('/', (_req, res) => res.redirect(FRONTEND_URL || '/'));
 
-// Iniciar servidor
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, '0.0.0.0', () => console.log(`Escuchando en puerto ${PORT}`));
