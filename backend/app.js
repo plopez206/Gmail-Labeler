@@ -7,7 +7,7 @@ const express = require('express');
 const session = require('express-session');
 const cors = require('cors');
 const { google } = require('googleapis');
-const OpenAI = require('openai').default;  // Default export
+const OpenAI = require('openai').default;
 const cron = require('node-cron');
 
 // Configuration
@@ -41,7 +41,6 @@ function saveWhitelist(list) {
 }
 
 // OAuth2 client factory supporting both web and installed creds
-// OAuth2 client factory supporting both web and installed creds
 function getOAuth2Client() {
   // Load credentials JSON from environment or file
   let raw;
@@ -56,8 +55,6 @@ function getOAuth2Client() {
     console.error("credentials.json must contain 'web' or 'installed'");
     process.exit(1);
   }
-  return new google.auth.OAuth2(conf.client_id, conf.client_secret, REDIRECT_URI);
-}
   return new google.auth.OAuth2(conf.client_id, conf.client_secret, REDIRECT_URI);
 }
 
@@ -124,8 +121,7 @@ async function classifyEmail(subject, snippet) {
 
 // Ensure Gmail label exists or create it
 async function getOrCreateLabel(gmail, name) {
-  const existing = (await gmail.users.labels.list({ userId: 'me' })).data.labels
-    .find(l => l.name === name);
+  const existing = (await gmail.users.labels.list({ userId: 'me' })).data.labels.find(l => l.name === name);
   if (existing) return existing.id;
   const created = await gmail.users.labels.create({
     userId: 'me',
@@ -182,9 +178,9 @@ app.get('/run-now', async (req, res) => {
   res.json({ status: 'ok', results });
 });
 
-// Basic home page
+// Optional root redirect to frontend
 app.get('/', (req, res) => {
-  res.send(`<h1>Gmail Automation</h1><a href="/auth">Connect & Subscribe</a><br><a href="/run-now">Run Now</a>`);
+  res.redirect(process.env.FRONTEND_URL || '/');
 });
 
 // Start server
