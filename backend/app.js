@@ -14,10 +14,13 @@ const cron   = require('node-cron');
 // Configuration
 const SCOPES           = ['https://www.googleapis.com/auth/gmail.modify'];
 const CREDENTIALS_PATH = path.join(__dirname, 'credentials.json');
-const TOKEN_PATH       = path.join(__dirname, 'token.json');
 const WHITELIST_PATH   = path.join(__dirname, 'whitelist.json');
+const TOKENS_DIR       = path.join(__dirname, 'tokens');
 const REDIRECT_URI     = process.env.REDIRECT_URI;       // Must match Google OAuth settings
 const FRONTEND_URL     = process.env.FRONTEND_URL;       // Your frontend URL
+
+// Ensure tokens directory exists
+if (!fs.existsSync(TOKENS_DIR)) fs.mkdirSync(TOKENS_DIR);
 
 // Initialize OpenAI client
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -38,7 +41,8 @@ app.get('/health', (req, res) => res.send('OK'));
 
 // Status endpoint
 app.get('/status', (req, res) => {
-  res.json({ connected: fs.existsSync(TOKEN_PATH) });
+  const users = loadWhitelist();
+  return res.json({ users, tokensDir: fs.existsSync(TOKENS_DIR) });
 });
 
 // Whitelist functions
@@ -84,12 +88,17 @@ app.get('/auth/callback', async (req, res) => {
     const { code } = req.query;
     const { tokens } = await client.getToken(code);
     client.setCredentials(tokens);
-    fs.writeFileSync(TOKEN_PATH, JSON.stringify(tokens));
 
-    // Auto-subscribe
+    // Get user email
     const gmail = google.gmail({ version: 'v1', auth: client });
     const profile = await gmail.users.getProfile({ userId: 'me' });
     const email = profile.data.emailAddress;
+
+    // Save token per user
+    const tokenFile = path.join(TOKENS_DIR, `${email}.json`);
+    fs.writeFileSync(tokenFile, JSON.stringify(tokens, null, 2));
+
+    // Auto-subscribe to whitelist
     const wl = loadWhitelist();
     if (!wl.includes(email)) {
       wl.push(email);
@@ -104,34 +113,52 @@ app.get('/auth/callback', async (req, res) => {
   }
 });
 
-// Get Gmail service
-async function getGmailService() {
+// Get Gmail service for a specific user
+async function getGmailService(email) {
   const client = getOAuth2Client();
-  if (!fs.existsSync(TOKEN_PATH)) {
-    throw new Error('Not authenticated');
+  const tokenFile = path.join(TOKENS_DIR, `${email}.json`);
+  if (!fs.existsSync(tokenFile)) {
+    throw new Error(`User ${email} not authenticated`);
   }
-  const tokens = JSON.parse(fs.readFileSync(TOKEN_PATH, 'utf8'));
+  const tokens = JSON.parse(fs.readFileSync(tokenFile, 'utf8'));
   client.setCredentials(tokens);
   return google.gmail({ version: 'v1', auth: client });
 }
 
-// Classify
+// Classifier using new labels
 async function classifyEmail(subject, snippet) {
-  const system = { role: 'system', content: /* prompt */
-    "You are an email classifier. Choose one category (emoji included): Arduino, Copy, Edit, ✅ Action Required, 🕒 Follow Up, 🤝 Client, 📌 Important, 🧾 Receipts, 📣 Marketing, 🗑️ Spam / Ignore, 📂 Archived"
+  const system = {
+    role: 'system',
+    content: `You are an email classifier. Based only on subject and snippet, assign ONE category:
+
+- Important
+- Action Required
+- Urgent
+- Newsletter
+- Advertising
+- Spam or Ignore
+
+Return just the category name.`
   };
   const user = { role: 'user', content: `Subject: ${subject}\nSnippet: ${snippet}` };
-  const resp = await openai.chat.completions.create({ model: 'gpt-3.5-turbo', messages: [system, user], temperature: 0 });
+  const resp = await openai.chat.completions.create({
+    model: 'gpt-3.5-turbo',
+    messages: [system, user],
+    temperature: 0
+  });
   return resp.choices[0].message.content.trim();
 }
 
-// Ensure label exists
+// Ensure label exists in user's Gmail
 async function getOrCreateLabel(gmail, name) {
   const { data } = await gmail.users.labels.list({ userId: 'me' });
   let lbl = data.labels.find(l => l.name === name);
   if (lbl) return lbl.id;
   try {
-    const created = await gmail.users.labels.create({ userId: 'me', requestBody: { name, labelListVisibility: 'labelShow', messageListVisibility: 'show' } });
+    const created = await gmail.users.labels.create({
+      userId: 'me',
+      requestBody: { name, labelListVisibility: 'labelShow', messageListVisibility: 'show' }
+    });
     return created.data.id;
   } catch (e) {
     if (e.response && e.response.status === 409) {
@@ -143,46 +170,53 @@ async function getOrCreateLabel(gmail, name) {
   }
 }
 
-// Process job
-async function processJob() {
+// Process job for a single user
+async function processJobForEmail(email) {
   try {
-    const gmail = await getGmailService();
-    const profile = await gmail.users.getProfile({ userId: 'me' });
-    const email = profile.data.emailAddress;
-    const wl = loadWhitelist();
-    if (wl.length && !wl.includes(email)) return [];
-
-    const res = await gmail.users.messages.list({ userId: 'me', labelIds: ['INBOX'], q: 'is:unread', maxResults: 5 });
-    console.log('Gmail response:', res.data);
+    const gmail = await getGmailService(email);
+    const res = await gmail.users.messages.list({ userId: 'me', labelIds: ['INBOX'], q: 'is:unread', maxResults: 20 });
     const msgs = res.data.messages || [];
-    const out = [];
     for (const m of msgs) {
       const msg = await gmail.users.messages.get({ userId: 'me', id: m.id, format: 'full' });
       const hdrs = msg.data.payload.headers;
-      const subj = hdrs.find(h=>h.name==='Subject')?.value || '(no subject)';
+      const subj = hdrs.find(h => h.name === 'Subject')?.value || '(no subject)';
       const snip = msg.data.snippet;
       const labelName = await classifyEmail(subj, snip);
       const lid = await getOrCreateLabel(gmail, labelName);
-      await gmail.users.messages.modify({ userId: 'me', id: m.id, requestBody: { addLabelIds: [lid, 'UNREAD'], removeLabelIds: [] } });
-      out.push({ subject: subj, label: labelName });
+      await gmail.users.messages.modify({
+        userId: 'me',
+        id: m.id,
+        requestBody: { addLabelIds: [lid], removeLabelIds: [] }
+      });
     }
-    return out;
   } catch (err) {
-    console.error('Error in processJob:', err);
-    return [];
+    console.error(`Error processing ${email}:`, err);
   }
 }
 
-// Cron
-cron.schedule('0 7 * * *', () => processJob());
-cron.schedule('0 15 * * *',() => processJob());
-console.log('Scheduler set');
+// Cron: run for all whitelisted users
+async function runAll() {
+  const wl = loadWhitelist();
+  for (const email of wl) {
+    await processJobForEmail(email);
+  }
+}
+cron.schedule('0 7 * * *', runAll);
+cron.schedule('0 16 * * *', runAll); // daily at 16:00 (4 PM)
+console.log('Scheduler set for daily runs at 07:00 and 16:00');
 
 // Endpoints
-app.get('/run-now', async (req, res) => res.json({ status:'ok', results: await processJob() }));
-app.get('/whitelist', (req,res) => res.json({ whitelist: loadWhitelist() }));
-app.get('/', (req,res) => res.redirect(FRONTEND_URL || '/'));
+app.get('/run-now', async (req, res) => {
+  const wl = loadWhitelist();
+  const results = [];
+  for (const email of wl) {
+    results.push({ email, status: await processJobForEmail(email) });
+  }
+  res.json({ status: 'ok', results });
+});
+app.get('/whitelist', (req, res) => res.json({ whitelist: loadWhitelist() }));
+app.get('/', (req, res) => res.redirect(FRONTEND_URL || '/'));
 
-// Start
+// Start server
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, '0.0.0.0', ()=> console.log(`Listening on ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`Listening on ${PORT}`));
