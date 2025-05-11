@@ -167,7 +167,6 @@ async function processJob() {
 
     const msgsRes = await gmail.users.messages.list({
       userId: 'me',
-      q: 'is:unread',
       maxResults: 5
     });
     const msgs = msgsRes.data.messages || [];
