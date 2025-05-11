@@ -115,13 +115,20 @@ app.get('/auth/callback', async (req, res) => {
     const { tokens } = await client.getToken(code);
     client.setCredentials(tokens);
 
-    // Obtener email del usuario
     const gmail = google.gmail({ version: 'v1', auth: client });
     const profile = await gmail.users.getProfile({ userId: 'me' });
     const email = profile.data.emailAddress;
 
-    // Guardar tokens en Supabase
-    await supabase.from(TABLE).upsert({ email, tokens }, { onConflict: 'email' });
+    // Intentamos guardar en Supabase…
+    const { data, error } = await supabase
+      .from(TABLE)
+      .upsert({ email, tokens }, { onConflict: 'email' });
+    
+    console.log('Upsert result:', { data, error });
+    if (error) {
+      console.error('Supabase upsert error:', error);
+      return res.status(500).send('Error guardando tokens en la base de datos');
+    }
 
     res.redirect(`${FRONTEND_URL}?authed=true`);
   } catch (err) {
@@ -129,6 +136,7 @@ app.get('/auth/callback', async (req, res) => {
     res.status(500).send('Error de autenticación');
   }
 });
+
 
 // Ejecuta clasificación para un email
 async function processJobForEmail(email) {
