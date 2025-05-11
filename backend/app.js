@@ -82,13 +82,16 @@ async function classifyEmail(from, subject, snippet, body) {
   const system = {
     role: 'system',
     content: `Eres un clasificador de emails. Según remitente, asunto, fragmento y cuerpo, elige UNA etiqueta EXACTA:
-- Important
-- Action Required
-- Urgent
-- Newsletter
-- Advertising
-- Spam or Ignore`
+  - Important
+  - Action Required
+  - Urgent
+  - Newsletter
+  - Advertising
+  - Spam or Ignore
+  
+  Si no encaja con ninguna, devuelve una etiqueta dinámica con el prefijo “Custom/”. Por ejemplo: “Custom/Registro de pago”.`
   };
+  
   const examples = [{
     from: 'noreply@github.com', subject: 'Please verify your email', snippet: 'Click aquí para verificar tu cuenta', body: '', label: 'Action Required'
   },{
