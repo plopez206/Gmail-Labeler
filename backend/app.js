@@ -39,11 +39,19 @@ app.use(session({
 // ------------------ Utilidades ------------------ //
 
 function getOAuth2Client() {
-  const raw = fs.readFileSync(CREDENTIALS_PATH, 'utf8');
+  let raw;
+  if (process.env.GOOGLE_CREDENTIALS_JSON) {
+    // Cargamos el JSON directamente desde la variable de entorno
+    raw = process.env.GOOGLE_CREDENTIALS_JSON;
+  } else {
+    // Fallback a fichero local (para desarrollo)
+    raw = fs.readFileSync(CREDENTIALS_PATH, 'utf8');
+  }
   const creds = JSON.parse(raw);
-  const conf = creds.web || creds.installed;
+  const conf  = creds.web || creds.installed;
   return new google.auth.OAuth2(conf.client_id, conf.client_secret, REDIRECT_URI);
 }
+
 
 async function getGmailService(email) {
   const { data, error } = await supabase
