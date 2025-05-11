@@ -160,13 +160,14 @@ async function processJob() {
     const profile = await gmail.users.getProfile({ userId: 'me' });
     const email   = profile.data.emailAddress;
     const whitelist = loadWhitelist();
-    if (!whitelist.includes(email)) {
-      console.log(`Skipping ${email}: not in whitelist.`);
-      return [];
-    }
+    if (whitelist.length > 0 && !whitelist.includes(email)) {
+        console.log(`Skipping ${email}: not in whitelist.`);
+        return [];
+      }
 
     const msgsRes = await gmail.users.messages.list({
       userId: 'me',
+      q: 'is:unread',
       maxResults: 5
     });
     const msgs = msgsRes.data.messages || [];
@@ -210,6 +211,12 @@ app.get('/run-now', async (req, res) => {
 app.get('/', (req, res) => {
   res.redirect(FRONTEND_URL || '/');
 });
+
+// DEBUG: muestra la whitelist actual
+app.get('/whitelist', (req, res) => {
+    res.json({ whitelist: loadWhitelist() });
+  });
+  
 
 // Start server, bind to PORT and all interfaces
 const PORT = process.env.PORT || 8080;
