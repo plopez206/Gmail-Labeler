@@ -87,8 +87,7 @@ async function classifyEmail(from, subject, snippet, body) {
 - Urgent
 - Newsletter
 - Advertising
-- Spam or Ignore
-Si no encaja, responde "Uncategorized".`
+- Spam or Ignore`
   };
   const examples = [{
     from: 'noreply@github.com', subject: 'Please verify your email', snippet: 'Click aquí para verificar tu cuenta', body: '', label: 'Action Required'
