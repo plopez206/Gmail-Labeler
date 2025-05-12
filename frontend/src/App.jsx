@@ -67,7 +67,7 @@ export default function App() {
               height={40}
               className="d-inline-block align-top me-2"
             />
-            <span className="h4 mb-0">MailCortex</span>
+            <span className="h4 mb-0">EmailCortex</span>
           </Navbar.Brand>
           <Navbar.Toggle aria-controls="navbar-nav" />
           <Navbar.Collapse id="navbar-nav">

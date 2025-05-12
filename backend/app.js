@@ -144,6 +144,7 @@ async function runAll() {
   const { data: users } = await supabase.from(TABLE).select('email');
   for (const u of users || []) await processJobForEmail(u.email);
 }
+// Start polling: runs `runAll()` every POLL_INTERVAL milliseconds (default: 60000 ms = 1 minute)
 setInterval(runAll, POLL_INTERVAL);
 console.log(`Polling every ${POLL_INTERVAL/1000}s`);
 
