@@ -86,6 +86,9 @@ async function classifyEmail(from, subject, snippet, body) {
 - Newsletter
 - Advertising
 - Spam or Ignore
+- Personal
+- Receipts
+- Travel
 If none match, return a dynamic label with prefix "Custom/" (e.g., "Custom/Billing Reminder").`}
   const examples = [
     { from: 'noreply@github.com', subject: 'Verify your email', snippet: 'Please click here to verify', body: '', label: 'Action Required' },
