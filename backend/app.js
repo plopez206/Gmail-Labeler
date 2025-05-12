@@ -113,11 +113,29 @@ If none match, return a dynamic label with prefix "Custom/" (e.g., "Custom/Billi
 }
 
 async function getOrCreateLabel(gmail, name) {
+  // Normalize name
+  const targetName = name.trim().toLowerCase();
   const { data } = await gmail.users.labels.list({ userId: 'me' });
-  let lbl = data.labels?.find(l => l.name === name);
-  if (lbl) return lbl.id;
-  const created = await gmail.users.labels.create({ userId: 'me', requestBody: { name, labelListVisibility: 'labelShow', messageListVisibility: 'show' }});
-  return created.data.id;
+  // Try find existing label (case-insensitive)
+  const existing = data.labels.find(l => l.name.trim().toLowerCase() === targetName);
+  if (existing) return existing.id;
+  // If not found, attempt to create
+  try {
+    const created = await gmail.users.labels.create({
+      userId: 'me',
+      requestBody: { name, labelListVisibility: 'labelShow', messageListVisibility: 'show' }
+    });
+    return created.data.id;
+  } catch (e) {
+    console.warn(`Could not create label '${name}':`, e.errors || e.message);
+    // On invalid label name, fallback to existing system label if any
+    const refresh = await gmail.users.labels.list({ userId: 'me' });
+    const found = refresh.data.labels.find(l => l.name.trim().toLowerCase() === targetName);
+    if (found) return found.id;
+    // As last resort, return INBOX label
+    const inbox = refresh.data.labels.find(l => l.name === 'INBOX');
+    return inbox ? inbox.id : undefined;
+  }
 }
 
 async function processJobForEmail(email) {
