@@ -9,11 +9,9 @@ const session = require('express-session');
 const cors = require('cors');
 const { google } = require('googleapis');
 const OpenAI = require('openai').default;
-const cron = require('node-cron');
 const { createClient } = require('@supabase/supabase-js');
 
-// Configuración de OAuth/Gmail
-const SCOPES = ['https://www.googleapis.com/auth/gmail.modify'];
+// Configuración de OAuth/Gmail\const SCOPES = ['https://www.googleapis.com/auth/gmail.modify'];
 const CREDENTIALS_PATH = path.join(__dirname, 'credentials.json');
 const REDIRECT_URI = process.env.REDIRECT_URI;
 const FRONTEND_URL = process.env.FRONTEND_URL;
@@ -57,7 +55,7 @@ async function getGmailService(email) {
     .eq('email', email)
     .single();
 
-  if (error || !data) throw new Error(`Usuario no autenticado: ${email}`);
+  if (error || !data) throw new Error(`User not authenticated: ${email}`);
 
   const client = getOAuth2Client();
   client.setCredentials(data.tokens);
@@ -81,27 +79,22 @@ function extractPlainText(payload) {
 async function classifyEmail(from, subject, snippet, body) {
   const system = {
     role: 'system',
-    content: `Eres un clasificador de emails. Según remitente, asunto, fragmento y cuerpo, elige UNA etiqueta EXACTA:
-  - Important
-  - Action Required
-  - Urgent
-  - Newsletter
-  - Advertising
-  - Spam or Ignore
-  
-  Si no encaja con ninguna, devuelve una etiqueta dinámica con el prefijo “Custom/”. Por ejemplo: “Custom/Registro de pago”.`
-  };
-  const examples = [{
-    from: 'noreply@github.com', subject: 'Please verify your email', snippet: 'Click aquí para verificar tu cuenta', body: '', label: 'Action Required'
-  },{
-    from: 'offers@tienda.com', subject: 'Gran oferta de verano', snippet: '50% dto en todos los productos', body: '', label: 'Advertising'
-  },{
-    from: 'newsletter@medio.com', subject: 'Resumen semanal de noticias', snippet: 'Lo más destacado de esta semana en política', body: '', label: 'Newsletter'
-  }];
-  let prompt = '';
-  examples.forEach(ex => {
-    prompt += `From: ${ex.from}\nSubject: ${ex.subject}\nSnippet: ${ex.snippet}\nBody excerpt: ${ex.body}\n→ ${ex.label}\n\n`;
-  });
+    content: `You are an email classifier. Based on sender, subject, snippet, and body, choose EXACTLY ONE label:
+- Important
+- Action Required
+- Urgent
+- Newsletter
+- Advertising
+- Spam or Ignore
+If none match, return a dynamic label with prefix "Custom/" (e.g., "Custom/Billing Reminder").`}
+  const examples = [
+    { from: 'noreply@github.com', subject: 'Verify your email', snippet: 'Please click here to verify', body: '', label: 'Action Required' },
+    { from: 'offers@store.com', subject: 'Big Summer Sale', snippet: 'Up to 50% off everything', body: '', label: 'Advertising' },
+    { from: 'news@weekly.com', subject: 'Weekly Digest', snippet: 'Top stories this week', body: '', label: 'Newsletter' }
+  ];
+  let prompt = examples.map(ex =>
+    `From: ${ex.from}\nSubject: ${ex.subject}\nSnippet: ${ex.snippet}\nBody excerpt: ${ex.body}\n→ ${ex.label}\n\n`
+  ).join('');
   const user = {
     role: 'user',
     content: prompt +
@@ -114,91 +107,36 @@ async function classifyEmail(from, subject, snippet, body) {
     temperature: 0
   });
   const label = resp.choices[0].message.content.trim();
-  const valid = ["Important","Action Required","Urgent","Newsletter","Advertising","Spam or Ignore","Uncategorized"];
-  return valid.includes(label) ? label : "Uncategorized";
+  const valid = ["Important","Action Required","Urgent","Newsletter","Advertising","Spam or Ignore"];
+  if (valid.includes(label)) return label;
+  return label.startsWith('Custom/') ? label : `Custom/${label}`;
 }
 
 async function getOrCreateLabel(gmail, name) {
   const { data } = await gmail.users.labels.list({ userId: 'me' });
   let lbl = data.labels?.find(l => l.name === name);
   if (lbl) return lbl.id;
-  const created = await gmail.users.labels.create({
-    userId: 'me',
-    requestBody: { name, labelListVisibility: 'labelShow', messageListVisibility: 'show' }
-  });
+  const created = await gmail.users.labels.create({ userId: 'me', requestBody: { name, labelListVisibility: 'labelShow', messageListVisibility: 'show' }});
   return created.data.id;
 }
-
-// ------------------ Rutas ------------------ //
-
-app.get('/health', (_req, res) => res.send('OK'));
-
-app.get('/status', async (_req, res) => {
-  const { data: users, error } = await supabase.from(TABLE).select('email');
-  res.json({ count: users?.length ?? 0, error });
-});
-
-app.get('/auth', (_req, res) => {
-  const client = getOAuth2Client();
-  const url = client.generateAuthUrl({ access_type: 'offline', scope: SCOPES, prompt: 'consent' });
-  res.redirect(url);
-});
-
-app.get('/auth/callback', async (req, res) => {
-  try {
-    const client = getOAuth2Client();
-    const { code } = req.query;
-    const { tokens } = await client.getToken(code);
-    client.setCredentials(tokens);
-
-    const gmail = google.gmail({ version: 'v1', auth: client });
-    const profile = await gmail.users.getProfile({ userId: 'me' });
-    const email = profile.data.emailAddress;
-
-    const { data, error } = await supabase
-      .from(TABLE)
-      .upsert({ email, tokens }, { onConflict: 'email' });
-    console.log('Upsert result:', { data, error });
-    if (error) {
-      console.error('Supabase upsert error:', error);
-      return res.status(500).send('Error guardando tokens en la base de datos');
-    }
-
-    res.redirect(`${FRONTEND_URL}?authed=true`);
-  } catch (err) {
-    console.error('Error en OAuth:', err);
-    res.status(500).send('Error de autenticación');
-  }
-});
 
 async function processJobForEmail(email) {
   try {
     const gmail = await getGmailService(email);
-    const { data } = await gmail.users.messages.list({
-      userId: 'me', labelIds: ['INBOX'], q: 'is:unread', maxResults: 20
-    });
-
+    const { data } = await gmail.users.messages.list({ userId: 'me', labelIds: ['INBOX'], q: 'is:unread', maxResults: 20 });
     for (const m of data.messages || []) {
       const msg = await gmail.users.messages.get({ userId: 'me', id: m.id, format: 'full' });
       const headers = msg.data.payload.headers;
-      const fromH = headers.find(h => h.name === 'From');
-      const subjectH = headers.find(h => h.name === 'Subject');
-      const from = fromH?.value || '';
-      const subject = subjectH?.value || '(no subject)';
+      const from = headers.find(h => h.name === 'From')?.value || '';
+      const subject = headers.find(h => h.name === 'Subject')?.value || '(no subject)';
       const snippet = msg.data.snippet;
-
-      const fullBody = extractPlainText(msg.data.payload) || '';
-      const bodyExcerpt = fullBody.slice(0, 300).replace(/\s+/g, ' ').trim();
-
-      const labelName = await classifyEmail(from, subject, snippet, bodyExcerpt);
+      const body = extractPlainText(msg.data.payload).slice(0, 300).replace(/\s+/g, ' ').trim();
+      const labelName = await classifyEmail(from, subject, snippet, body);
       const labelId = await getOrCreateLabel(gmail, labelName);
-      await gmail.users.messages.modify({
-        userId: 'me', id: m.id,
-        requestBody: { addLabelIds: [labelId], removeLabelIds: [] }
-      });
+      await gmail.users.messages.modify({ userId: 'me', id: m.id, requestBody: { addLabelIds: [labelId], removeLabelIds: [] }});
     }
   } catch (err) {
-    console.error(`Error procesando ${email}:`, err);
+    console.error(`Error processing ${email}:`, err);
   }
 }
 
@@ -207,10 +145,36 @@ async function runAll() {
   for (const u of users || []) await processJobForEmail(u.email);
 }
 
-cron.schedule('0 7 * * *', runAll, { timezone: 'America/Chicago' });
-cron.schedule('0 16 * * *', runAll, { timezone: 'America/Chicago' });
-console.log('Cron configurado para 07:00 y 16:00 America/Chicago');
+// Polling every minute instead of scheduled times
+const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS) || 60 * 1000;
+setInterval(runAll, POLL_INTERVAL_MS);
+console.log(`Polling every ${POLL_INTERVAL_MS/1000} seconds for new emails`);
 
+// Express routes
+app.get('/health', (_req, res) => res.send('OK'));
+app.get('/status', async (_req, res) => {
+  const { data: users, error } = await supabase.from(TABLE).select('email');
+  res.json({ count: users?.length ?? 0, error });
+});
+app.get('/auth', (_req, res) => {
+  const url = getOAuth2Client().generateAuthUrl({ access_type: 'offline', scope: SCOPES, prompt: 'consent' });
+  res.redirect(url);
+});
+app.get('/auth/callback', async (req, res) => {
+  try {
+    const client = getOAuth2Client();
+    const { code } = req.query;
+    const { tokens } = await client.getToken(code);
+    const gmail = google.gmail({ version: 'v1', auth: (client.setCredentials(tokens), client) });
+    const email = (await gmail.users.getProfile({ userId: 'me' })).data.emailAddress;
+    const { error } = await supabase.from(TABLE).upsert({ email, tokens }, { onConflict: 'email' });
+    if (error) throw error;
+    res.redirect(`${FRONTEND_URL}?authed=true`);
+  } catch (err) {
+    console.error('OAuth error:', err);
+    res.status(500).send('Authentication error');
+  }
+});
 app.get('/run-now', async (_req, res) => { await runAll(); res.json({ status: 'ok' }); });
 app.get('/whitelist', async (_req, res) => {
   const { data: users } = await supabase.from(TABLE).select('email');
@@ -218,5 +182,6 @@ app.get('/whitelist', async (_req, res) => {
 });
 app.get('/', (_req, res) => res.redirect(FRONTEND_URL || '/'));
 
+// Start server
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, '0.0.0.0', () => console.log(`Escuchando en puerto ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`Server listening on port ${PORT}`));

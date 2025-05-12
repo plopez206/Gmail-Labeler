@@ -11,7 +11,8 @@ import {
   ListGroup,
   Row,
   Col,
-  Image
+  Image,
+  Nav
 } from 'react-bootstrap';
 
 export default function App() {
@@ -58,17 +59,49 @@ export default function App() {
       {/* Navbar with logo */}
       <Navbar bg="dark" variant="dark" expand="lg" sticky="top">
         <Container>
-          <Navbar.Brand href="#">
-            {/* Simple logo */}
+          <Navbar.Brand href="#" className="d-flex align-items-center">
             <Image
-              src="/logo192.png"
+              src="/LogoMailCortex.png"
               alt="MailCortex Logo"
-              width={30}
-              height={30}
+              width={40}
+              height={40}
               className="d-inline-block align-top me-2"
             />
-            MailCortex
+            <span className="h4 mb-0">MailCortex</span>
           </Navbar.Brand>
+          <Navbar.Toggle aria-controls="navbar-nav" />
+          <Navbar.Collapse id="navbar-nav">
+            <Nav className="ms-auto align-items-center">
+              {connected ? (
+                <Button
+                  onClick={runNow}
+                  disabled={running}
+                  variant="outline-light"
+                  size="sm"
+                >
+                  {running ? (
+                    <>
+                      <Spinner
+                        as="span"
+                        animation="border"
+                        size="sm"
+                        role="status"
+                        aria-hidden="true"
+                        className="me-1"
+                      />
+                      Processing
+                    </>
+                  ) : (
+                    'Run Now'
+                  )}
+                </Button>
+              ) : (
+                <Button href={`${API}/auth`} variant="light" size="sm">
+                  Connect
+                </Button>
+              )}
+            </Nav>
+          </Navbar.Collapse>
         </Container>
       </Navbar>
 
