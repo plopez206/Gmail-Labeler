@@ -1,6 +1,6 @@
 // backend/app.js
 // Node.js Gmail automation backend using Express, Google OAuth, OpenAI & Supabase
-// Focused on best quality‑to‑cost ratio (minimal tokens, high precision)
+// Labels at 07:00 and 15:00 only
 
 require('dotenv').config();
 const fs      = require('fs');
@@ -8,6 +8,7 @@ const path    = require('path');
 const express = require('express');
 const session = require('express-session');
 const cors    = require('cors');
+const cron    = require('node-cron');
 const { google } = require('googleapis');
 const OpenAI  = require('openai').default;
 const { createClient } = require('@supabase/supabase-js');
@@ -20,15 +21,11 @@ const CREDENTIALS       = process.env.GOOGLE_CREDENTIALS_JSON;
 const CREDENTIALS_PATH  = path.join(__dirname, 'credentials.json');
 const REDIRECT_URI      = process.env.REDIRECT_URI;
 const FRONTEND_URL      = process.env.FRONTEND_URL;
-const POLL_INTERVAL_MS  = Number(process.env.POLL_INTERVAL_MS) || 60_000; // 1 min
-const OPENAI_MODEL      = process.env.OPENAI_MODEL || 'gpt-3.5-turbo';     // cost‑efficient
+const OPENAI_MODEL      = process.env.OPENAI_MODEL || 'gpt-3.5-turbo';
 
-// Supabase
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 const TABLE    = 'users';
-
-// OpenAI
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai   = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // ────────────────────────────────────────────────────────────
 // 2. Express setup
@@ -44,7 +41,7 @@ app.use(session({
 }));
 
 // ────────────────────────────────────────────────────────────
-// 3. Helpers
+// 3. Helpers (unchanged)
 // ────────────────────────────────────────────────────────────
 function getOAuth2Client() {
   const raw   = CREDENTIALS || fs.readFileSync(CREDENTIALS_PATH, 'utf8');
@@ -54,11 +51,7 @@ function getOAuth2Client() {
 }
 
 async function getGmailService(email) {
-  const { data, error } = await supabase
-    .from(TABLE)
-    .select('tokens')
-    .eq('email', email)
-    .single();
+  const { data, error } = await supabase.from(TABLE).select('tokens').eq('email', email).single();
   if (error || !data) throw new Error(`User not authenticated: ${email}`);
   const client = getOAuth2Client();
   client.setCredentials(data.tokens);
@@ -70,15 +63,14 @@ function extractPlainText(payload) {
     return Buffer.from(payload.body.data, 'base64').toString('utf8');
   }
   if (payload.parts) {
-    for (const part of payload.parts) {
-      const text = extractPlainText(part);
-      if (text) return text;
+    for (const p of payload.parts) {
+      const t = extractPlainText(p);
+      if (t) return t;
     }
   }
   return '';
 }
 
-// Fixed labels with professional emojis
 const LABELS = {
   important:       'Important 🔔',
   action_required: 'Action Required ✅',
@@ -92,17 +84,15 @@ const LABELS = {
 };
 const LABEL_VALUES = Object.values(LABELS);
 
-// Classify email using minimal tokens
 async function classifyEmail(from, subject, snippet, body) {
   const sys = {
     role: 'system',
-    content: `Pick exactly one:\n${LABEL_VALUES.join('\n')}`
+    content: `Pick exactly one label:\n${LABEL_VALUES.join('\n')}`
   };
   const usr = {
     role: 'user',
     content: `From:${from}\nSubject:${subject}\nSnippet:${snippet}\nBody:${body.slice(0,200)}`
   };
-
   const resp = await openai.chat.completions.create({
     model: OPENAI_MODEL,
     messages: [sys, usr],
@@ -114,24 +104,19 @@ async function classifyEmail(from, subject, snippet, body) {
 }
 
 async function getOrCreateLabel(gmail, name) {
-  const target = name.toLowerCase();
+  const want = name.toLowerCase();
   const { data } = await gmail.users.labels.list({ userId: 'me' });
-  const found = data.labels.find(l => l.name.toLowerCase() === target);
-  if (found) return found.id;
+  const hit = data.labels.find(l => l.name.toLowerCase() === want);
+  if (hit) return hit.id;
   try {
     const created = await gmail.users.labels.create({
       userId: 'me',
-      requestBody: {
-        name,
-        labelListVisibility: 'labelShow',
-        messageListVisibility: 'show'
-      }
+      requestBody: { name, labelListVisibility: 'labelShow', messageListVisibility: 'show' }
     });
     return created.data.id;
   } catch {
-    // fallback: find again or use INBOX
     const fresh = (await gmail.users.labels.list({ userId: 'me' })).data.labels;
-    return fresh.find(l => l.name.toLowerCase() === target)?.id
+    return fresh.find(l => l.name.toLowerCase() === want)?.id
         || fresh.find(l => l.name === 'INBOX')?.id;
   }
 }
@@ -139,16 +124,13 @@ async function getOrCreateLabel(gmail, name) {
 async function processJobForEmail(email) {
   try {
     const gmail = await getGmailService(email);
-    // cache our labels
-    const { data: lblList } = await gmail.users.labels.list({ userId: 'me' });
-    const ourIds = new Set(
-      lblList.labels
-        .filter(l => LABEL_VALUES.includes(l.name))
-        .map(l => l.id)
-    );
-    const nameMap = new Map(lblList.labels.map(l => [l.name, l.id]));
+    // preload labels
+    const { data: labels } = await gmail.users.labels.list({ userId: 'me' });
+    const ourIds = new Set(labels
+      .filter(l => LABEL_VALUES.includes(l.name))
+      .map(l => l.id));
+    const nameId = new Map(labels.map(l => [l.name, l.id]));
 
-    // fetch unread
     const { data } = await gmail.users.messages.list({
       userId: 'me',
       labelIds: ['INBOX'],
@@ -157,26 +139,20 @@ async function processJobForEmail(email) {
     });
 
     for (const m of data.messages || []) {
-      const msg = await gmail.users.messages.get({
-        userId: 'me',
-        id: m.id,
-        format: 'full'
-      });
-
-      // skip if already labeled
+      const msg = await gmail.users.messages.get({ userId: 'me', id: m.id, format: 'full' });
       if (msg.data.labelIds.some(id => ourIds.has(id))) continue;
 
       const hdr     = msg.data.payload.headers;
-      const from    = hdr.find(h => h.name === 'From')?.value || '';
-      const subject = hdr.find(h => h.name === 'Subject')?.value || '';
+      const from    = hdr.find(h => h.name==='From')?.value  || '';
+      const subject = hdr.find(h => h.name==='Subject')?.value || '';
       const snippet = msg.data.snippet;
       const body    = extractPlainText(msg.data.payload);
 
       const labelName = await classifyEmail(from, subject, snippet, body);
-      let labelId     = nameMap.get(labelName);
+      let labelId     = nameId.get(labelName);
       if (!labelId) {
         labelId = await getOrCreateLabel(gmail, labelName);
-        nameMap.set(labelName, labelId);
+        nameId.set(labelName, labelId);
         ourIds.add(labelId);
       }
 
@@ -187,7 +163,7 @@ async function processJobForEmail(email) {
       });
     }
   } catch (err) {
-    console.error(`Process ${email}:`, err);
+    console.error(`Error processing ${email}:`, err);
   }
 }
 
@@ -198,12 +174,15 @@ async function runAll() {
   }
 }
 
-// polling loop
-setInterval(runAll, POLL_INTERVAL_MS);
-console.log(`Polling every ${POLL_INTERVAL_MS/1000}s for new emails`);
+// ────────────────────────────────────────────────────────────
+// 4. Scheduling: 07:00 & 15:00 America/Chicago
+// ────────────────────────────────────────────────────────────
+cron.schedule('0 7 * * *', () => runAll(),   { timezone: 'America/Chicago' });
+cron.schedule('0 15 * * *', () => runAll(),  { timezone: 'America/Chicago' });
+console.log('Scheduled jobs at 07:00 and 15:00 America/Chicago');
 
 // ────────────────────────────────────────────────────────────
-// 4. Routes
+// 5. Routes
 // ────────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => res.send('OK'));
 app.get('/status', async (_req, res) => {
@@ -220,15 +199,13 @@ app.get('/auth', (_req, res) => {
 });
 app.get('/auth/callback', async (req, res) => {
   try {
-    const client = getOAuth2Client();
+    const client   = getOAuth2Client();
     const { code } = req.query;
     const { tokens } = await client.getToken(code);
     client.setCredentials(tokens);
-
-    const gmail = google.gmail({ version: 'v1', auth: client });
-    const email = (await gmail.users.getProfile({ userId: 'me' })).data.emailAddress;
-    await supabase.from(TABLE).upsert({ email, tokens }, { onConflict: 'email' });
-
+    const gmail    = google.gmail({ version: 'v1', auth: client });
+    const email    = (await gmail.users.getProfile({ userId: 'me' })).data.emailAddress;
+    await supabase.from(TABLE).upsert({ email, tokens }, { onConflict:'email' });
     res.redirect(`${FRONTEND_URL}?authed=true`);
   } catch (e) {
     console.error('OAuth error:', e);
@@ -242,12 +219,12 @@ app.get('/run-now', async (_req, res) => {
 app.get('/', (_req, res) =>
   res.send(`
     <h1>MailCortex API</h1>
-    <p>Service is running. Try <a href="/health">/health</a> or <a href="/status">/status</a>.</p>
+    <p>Service is running. Use <code>/health</code> or <code>/status</code>.</p>
   `)
 );
 
 // ────────────────────────────────────────────────────────────
-// 5. Start server
+// 6. Start server
 // ────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, '0.0.0.0', () => console.log(`API listening on port ${PORT}`));
